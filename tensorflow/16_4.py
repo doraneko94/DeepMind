@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 n_inputs = 4
-n_hidden = 4
+n_hidden = 4 #
 n_outputs = 1
 initializer = tf.contrib.layers.variance_scaling_initializer()
 
