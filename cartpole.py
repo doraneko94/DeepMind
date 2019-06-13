@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 plt.style.use("seaborn")
 plt.rcParams["font.family"] = "IPAexGothic"
 
-class DQN(object):
+class DQN(object): #
 
     def __init__(self, env_id, agent_hist_len=4, memory_size=2000,
                  replay_start_size=32, gamma=0.99, eps=1.0, eps_min=1e-4,
