@@ -1,45 +1,41 @@
 import tensorflow as tf
 import numpy as np
+from functools import partial
 
 n_inputs = 28*28
 n_hidden1 = 300
 n_hidden2 = 100
 n_outputs = 10
 
+training = tf.placeholder_with_default(False, shape=(), name="training")
+my_batch_norm_layer = partial(tf.layers.batch_normalization, training=training, momentum=0.9)
+
 X = tf.placeholder(tf.float32, shape=(None, n_inputs), name="X")
 y = tf.placeholder(tf.int32, shape=(None), name="y")
 
-def neuron_layer(X, n_neurons, name, activation=None):
-    with tf.name_scope(name):
-        n_inputs = int(X.get_shape()[1])
-        stddev = 2 / np.sqrt(n_inputs + n_neurons)
-        init = tf.trancated_normal((n_inputs, n_neurons), stddev=stddev)
-        W = tf.Variable(init, name="karnel")
-        b = tf.Variable(tf.zeros([n_neurons]), name="bias")
-        Z = tf.matmul(X, W) + b
-        if activation is not None:
-            return activation(Z)
-        else:
-            return Z
-"""
+scale = 0.001
+
+my_dense_layer = partial(tf.layers.dense, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l1_regularizer(scale))
+
 with tf.name_scope("dnn"):
-    hidden1 = neuron_layer(X, n_hidden1, name="hidden1", activation=tf.nn.relu)
-    hidden2 = neuron_layer(X, n_hidden2, name="hidden2", activation=tf.nn.relu)
-    logits = neuron_layer(hidden2, n_outputs, name="outputs")
-"""
-with tf.name_scope("dnn"):
-    hidden1 = tf.layers.dense(X, n_hidden1, name="hidden1", activation=tf.nn.relu)
-    hidden2 = tf.layers.dense(hidden1, n_hidden2, name="hidden2", activation=tf.nn.relu)
-    logits = tf.layers.dense(hidden2, n_outputs, name="outputs")
+    hidden1 = my_dense_layer(X, n_hidden1, name="hidden1")
+    hidden2 = my_dense_layer(hidden1, n_hidden2, name="hidden2")
+    logits = my_dense_layer(hidden2, n_outputs, activation=None, name="outputs")
 
 with tf.name_scope("loss"):
     xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
-    loss = tf.reduce_mean(xentropy, name="loss")
-
+    base_loss = tf.reduce_mean(xentropy, name="avg_xentropy")
+    reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+    loss = tf.add_n([base_loss] + reg_losses, name="loss")
+    
 learning_rate = 0.01
 
+threthold = 1.0
+
 with tf.name_scope("train"):
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+    optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=0.9)
+    grads_and_vars = optimizer.compute_gradients(loss)
+    capped_gvs = [(tf.clip_by_value(grad, -threthold, threthold), var) for grad, var in grads_and_vars]
     training_op = optimizer.minimize(loss)
 
 with tf.name_scope("eval"):
@@ -74,11 +70,13 @@ def shuffle_batch(X, y, batch_size):
         X_batch, y_batch = X[batch_idx], y[batch_idx]
         yield X_batch, y_batch
 
+extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+
 with tf.Session() as sess:
     init.run()
     for epoch in range(n_epochs):
         for X_batch, y_batch in shuffle_batch(X_train, y_train, batch_size):
-            sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
+            sess.run([training_op, extra_update_ops], feed_dict={training: True, X: X_batch, y: y_batch})
         acc_batch = accuracy.eval(feed_dict={X: X_batch, y: y_batch})
         acc_val = accuracy.eval(feed_dict={X: X_eval, y: y_eval})
         print(epoch, "Batch accuracy:", acc_batch, "Val accuracy", acc_val)

@@ -5,9 +5,9 @@ from sklearn.preprocessing import StandardScaler
 
 housing = fetch_california_housing()
 m, n = housing.data.shape
-housing_data_plus_bias = np.c_[np.ones((m, 1)), housing.data]
 scaler = StandardScaler()
-scaled_housing_data_plus_bias = scaler.fit_transform(housing_data_plus_bias)
+scaled_housing_data = scaler.fit_transform(housing.data)
+scaled_housing_data_plus_bias = np.c_[np.ones((m, 1)), scaled_housing_data]
 
 n_epochs = 1000
 learning_rate = 0.01
