@@ -1,0 +1,1 @@
+It is from https://github.com/sfujiwara/tictactoe-tensorflow/blob/master/generate_data.py
