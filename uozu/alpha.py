@@ -243,9 +243,9 @@ def battle():
     env.reset()
     player = 1
     done = False
-    obs0 = np.zeros((3, 3))
-    obs1 = np.zeros((3, 3))
-    obs3 = np.zeros((3, 3))
+    obs0 = np.zeros((1, 9))
+    obs1 = np.zeros((1, 9))
+    obs3 = np.zeros((1, 9))
     if np.random.random() < 0.5:
         new_player = 1
     else:
@@ -268,15 +268,16 @@ def battle_with_rand():
     env.reset()
     player = 1
     done = False
-    obs0 = np.zeros((3, 3))
-    obs1 = np.zeros((3, 3))
-    obs3 = np.zeros((3, 3))
+    obs0 = np.zeros((1,9))
+    obs1 = np.zeros((1,9))
+    obs3 = np.zeros((1,9))
     if np.random.random() < 0.5:
         new_player = 1
     else:
         new_player = -1
-
+    print(new_player)
     while (not done):
+        print(obs0.reshape((3,3)))
         state = np.array([state_reshape(obs0, obs1, obs3, player)])
         if new_player == player:
             prob = p_new.eval(feed_dict={X_state: state})
@@ -291,7 +292,7 @@ def battle_with_rand():
 
 with tf.Session() as sess:
     init.run()
-    for i in range(400):
+    for i in range(200):
         for j in range(25):
             example(example_memory)
         for j in range(25):
@@ -310,7 +311,7 @@ with tf.Session() as sess:
                 win += 1
             else:
                 lose += 1
-        if win + lose > 0 and win / (win + lose) > 0.6:
+        if win + lose > 0 and win / (win + lose) >= 0.6:
             print("RENEW!")
             copy_new_to_old.run()
         else:
