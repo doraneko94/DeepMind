@@ -15,7 +15,7 @@ conv_activation = [tf.nn.relu] * 2
 
 n_hidden_in = 2 * 2 * 8
 n_hidden = 16
-hidden_activation1 = tf.nn.relu
+hidden_activation1 = tf.nn.sigmoid
 hidden_activation2 = tf.nn.tanh
 n_outputs1 = 9
 n_outputs2 = 1
@@ -162,6 +162,8 @@ class MCTS:
             node = self.digraph.nodes[n]
             ns[node["A"]] = n 
             PUCT[node["A"]] = node["W"]*self.player/node["N"] + self.c*node["P"]*rNp/(1+node["N"])
+        if PUCT.sum() == 0:
+            PUCT += 1e-7
         PUCT = PUCT / PUCT.sum()
         next_node = ns[PUCT==PUCT.max()][0]
         self.player *= -1
@@ -279,7 +281,7 @@ def battle_with_rand():
         if new_player == player:
             prob = p_new.eval(feed_dict={X_state: state})
         else:
-            prob = np.random.random(9)
+            prob = np.random.random((1, 9))
         actions = np.argsort(prob[0])[::-1]
         for a in actions:
             obs0, obs1, obs3, reward, done, player, valid = env.step(a)
@@ -289,17 +291,27 @@ def battle_with_rand():
 
 with tf.Session() as sess:
     init.run()
-    for i in range(200):
-        print(i)
+    for i in range(400):
         for j in range(25):
             example(example_memory)
         for j in range(25):
             state_batch, pi_batch, z_batch = make_batch(batch_size)
+            if j == 0:
+                print("{}: loss={}".format(i, loss.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
+                #print("error: {}, entropy: {}".format(error.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch}),
+                #                                      entropy.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
+                #print(p_new.eval(feed_dict={X_state: state_batch}))
             training_op.run(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})
-        point = 0
+        win = 0
+        lose = 0
         for j in range(25):
-            point += battle()
-        if point >= 5:
+            point = battle()
+            if point == 1:
+                win += 1
+            else:
+                lose += 1
+        if win + lose > 0 and win / (win + lose) > 0.6:
+            print("RENEW!")
             copy_new_to_old.run()
         else:
             copy_old_to_new.run()
