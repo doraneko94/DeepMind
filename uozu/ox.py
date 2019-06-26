@@ -31,7 +31,7 @@ class oxEnv:
         self.obsque.append(np.copy(obs0))
         reward, done = self.check_game_result()
         valid = 1
-        return obs0, obs1, obs3, reward, done, -self.current_player, valid
+        return obs0, obs1, obs3, reward, done, self.current_player, valid
 
     def check_game_result(self):
         x_win, o_win, is_full = False, False, False

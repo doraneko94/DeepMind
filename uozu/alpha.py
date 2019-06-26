@@ -92,7 +92,7 @@ class MCTS:
         self.node_count = 1
         self.root = 0
         self.init_player = 1
-        self.c = 0.01
+        self.c = 0.1
 
     def obs(self, node_num):
         obs0 = np.copy(self.digraph.nodes[node_num]["state"])
@@ -201,7 +201,7 @@ def state_reshape(obs0, obs1, obs3, player):
     else:
         return np.concatenate((obs0_x, obs0_o, obs1_x, obs1_o, obs3_x, obs3_o, -np.ones((3,3,1))), axis=2)
 
-def example(example_memory):
+def example(example_memory, gamma=0.9):
     ex_s = []
     ex_p = []
     Tree = MCTS()
@@ -220,7 +220,7 @@ def example(example_memory):
         if done:
             z_out = reward
             break
-    ex_z = [z_out] * len(ex_p)
+    ex_z = [z_out*gamma**i for i in range(len(ex_p))][::-1]
     for ss, pp, zz in zip(ex_s, ex_p, ex_z):
         if len(example_z) == example_memory:
             index = np.random.randint(example_memory)
@@ -250,9 +250,10 @@ def battle():
         new_player = 1
     else:
         new_player = -1
-
+    #print(new_player)
     while (not done):
         state = np.array([state_reshape(obs0, obs1, obs3, player)])
+        #print(obs0.reshape(3,3))
         if new_player == player:
             prob = p_new.eval(feed_dict={X_state: state})
         else:
@@ -262,6 +263,7 @@ def battle():
             obs0, obs1, obs3, reward, done, player, valid = env.step(a)
             if valid:
                 break
+    #print(reward)
     return reward * new_player
 
 def battle_with_rand():
@@ -278,9 +280,11 @@ def battle_with_rand():
     print(new_player)
     while (not done):
         print(obs0.reshape((3,3)))
+        print("player: {}".format(player))
         state = np.array([state_reshape(obs0, obs1, obs3, player)])
         if new_player == player:
             prob = p_new.eval(feed_dict={X_state: state})
+            print(prob)
         else:
             prob = np.random.random((1, 9))
         actions = np.argsort(prob[0])[::-1]
@@ -288,14 +292,15 @@ def battle_with_rand():
             obs0, obs1, obs3, reward, done, player, valid = env.step(a)
             if valid:
                 break
+    print(reward)
     return reward * new_player
 
 with tf.Session() as sess:
     init.run()
     for i in range(200):
-        for j in range(25):
+        for j in range(50):
             example(example_memory)
-        for j in range(25):
+        for j in range(50):
             state_batch, pi_batch, z_batch = make_batch(batch_size)
             if j == 0:
                 print("{}: loss={}".format(i, loss.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
@@ -311,11 +316,15 @@ with tf.Session() as sess:
                 win += 1
             else:
                 lose += 1
-        if win + lose > 0 and win / (win + lose) >= 0.6:
+        if win + lose > 0 and win / (win + lose) >= 0.55:
             print("RENEW!")
             copy_new_to_old.run()
         else:
             copy_old_to_new.run()
+        if win + lose == 0:
+            print("win rate: None")
+        else:
+            print("win rate: {}".format(win / (win + lose)))
     
     point = 0
     for i in range(100):
