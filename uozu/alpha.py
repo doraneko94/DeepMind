@@ -3,6 +3,14 @@ import numpy as np
 from ox import oxEnv, isvalid
 import networkx as nx
 import math
+import time
+import pickle
+
+start = time.time()
+
+gpuConfig = tf.ConfigProto(
+    gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.9),
+    device_count={'GPU': 0})
 
 input_height = 3
 input_width = 3
@@ -41,7 +49,10 @@ def alpha(X_state, name):
                                   activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
         hidden2 = tf.layers.dense(last_conv_layer_flat, n_hidden,
                                   activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
-        p = tf.layers.dense(hidden1, n_outputs1, activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
+        hidden3 = tf.layers.dense(hidden1, n_hidden,
+                                  activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
+        p_raw = tf.layers.dense(hidden3, n_outputs1, activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
+        p = tf.nn.softmax(p_raw)
         v = tf.layers.dense(hidden2, n_outputs2, activation=hidden_activation2, kernel_initializer=initializer, kernel_regularizer=regularizer)
     trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name)
     trainable_vars_by_name = {var.name[len(scope.name):]: var for var in trainable_vars}
@@ -57,42 +68,62 @@ copy_ops_on = [v_new.assign(vars_old[var_name])
             for var_name, v_new in vars_new.items()]
 copy_old_to_new = tf.group(*copy_ops_on)
 
-learning_rate = 0.001
-momentum = 0.95
+learning_rate = 0.04
+#momentum = 0.95
 
 with tf.variable_scope("train"):
     z = tf.placeholder(tf.float32, shape=[None, 1])
     pi = tf.placeholder(tf.float32, shape=[None, 9])
 
     error = tf.square(z - v_new)
-    entropy = tf.reshape(tf.diag_part(tf.matmul(pi, tf.transpose(tf.log(p_new+1e-7)))), (-1, 1))
-    loss = tf.reduce_mean(error - entropy)
+    p_soft = tf.nn.softmax(p_new)
+    entropy = tf.nn.softmax_cross_entropy_with_logits_v2(labels=pi , logits=p_soft)
+    loss = tf.reduce_mean(error + entropy)
 
-    optimizer = tf.train.MomentumOptimizer(learning_rate, momentum, use_nesterov=True)
+    optimizer = tf.train.AdamOptimizer(learning_rate)
     training_op = optimizer.minimize(loss)
 
 init = tf.global_variables_initializer()
+saver = tf.train.Saver()
 
 example_state = []
 example_pi = []
 example_z = []
-example_memory = 5000
+example_memory = 50000
 env = oxEnv()
 
 max_turn = 9
-depth = 3
+depth = 9
 
-batch_size = 9
+batch_size = 32
 
 class MCTS:
     
-    def __init__(self):
+    def __init__(self, c=1):
         self.digraph = nx.DiGraph()
-        self.digraph.add_node(0, state=np.zeros(9, dtype=np.int32), W=0, N=0, P=1, A=None, done=0)
+        self.digraph.add_node(0, state=np.zeros(9, dtype=np.int32), W=0, N=0, P=1, A=None, done=0, player=1, lock=0, turn=0)
         self.node_count = 1
         self.root = 0
-        self.init_player = 1
-        self.c = 0.1
+        self.c = c
+        self.dc = 0.9
+        self.dgamma = 0.9
+        self.turn = 0
+        self.kifu = {}
+
+    def reset(self, c=1):
+        self.root = 0
+        self.c = c
+        self.turn = 0
+        self.kifu = {}
+
+    def update_p(self):
+        for node_num in self.digraph.nodes:
+            if self.digraph.nodes[node_num]["lock"] != 1:
+                obs0, obs1, obs3 = self.obs(node_num)
+                state = np.array([state_reshape(obs0, obs1, obs3, self.digraph.nodes[node_num]["player"])])
+                prob = p_old.eval(feed_dict={X_state: state})[0]
+                for n in self.digraph.successor(node_num):
+                    self.digraph.nodes[n]["P"] = prob[self.digraph.nodes[n]["A"]]
 
     def obs(self, node_num):
         obs0 = np.copy(self.digraph.nodes[node_num]["state"])
@@ -122,64 +153,125 @@ class MCTS:
 
     def step(self, node_num):
         if self.digraph.nodes[node_num]["done"] == 1:
-            return self.digraph.nodes[node_num]["W"]
+            self.digraph.nodes[node_num]["W"] += self.digraph.nodes[node_num]["W"] / self.digraph.nodes[node_num]["N"]
+            self.digraph.nodes[node_num]["N"] += 1
+            return #self.digraph.nodes[node_num]["W"]
         elif self.digraph.out_degree(node_num) == 0:
             pass_flag = True
             obs0, obs1, obs3 = self.obs(node_num)
-            state = np.array([state_reshape(obs0, obs1, obs3, self.player)])
+            state = np.array([state_reshape(obs0, obs1, obs3, self.digraph.nodes[node_num]["player"])])
             prob = p_old.eval(feed_dict={X_state: state})[0]
+            lock_lst = []
+            node_lst = []
             for a in range(9):
-                obs, reward, done, valid = isvalid(self.digraph.nodes[node_num]["state"], a, self.player)
+                obs, reward, done, valid = isvalid(self.digraph.nodes[node_num]["state"], a, self.digraph.nodes[node_num]["player"])
                 if valid:
+                    node_lst.append(self.node_count)
                     pass_flag = False
                     if done:
                         self.digraph.nodes[node_num]["W"] += reward
-                        self.digraph.add_node(self.node_count, state=obs, W=reward, N=1, P=prob[a], A=a, done=1)
+                        self.digraph.add_node(self.node_count, state=obs, W=reward, N=1, P=prob[a], A=a, done=1, lock=1, player=-self.digraph.nodes[node_num]["player"])
+                        if reward == self.digraph.nodes[node_num]["player"]:
+                            self.digraph.nodes[node_num]["lock"] = 1
+                            lock_lst.append(a)
                     else:
                         obs0 = np.copy(obs)
                         obs1, obs3 = self.obs_pre(node_num)
-                        state_v = np.array([state_reshape(obs0, obs1, obs3, self.player)])
-                        v = v_old.eval(feed_dict={X_state: state_v})[0]
+                        state_v = np.array([state_reshape(obs0, obs1, obs3, self.digraph.nodes[node_num]["player"])])
+                        v = v_old.eval(feed_dict={X_state: state_v})[0][0]
                         self.digraph.nodes[node_num]["W"] += v
-                        self.digraph.add_node(self.node_count, state=obs, W=v, N=1, P=prob[a], A=a, done=0)
+                        self.digraph.add_node(self.node_count, state=obs, W=v, N=1, P=prob[a], A=a, done=0, lock=0, player=-self.digraph.nodes[node_num]["player"])
                     self.digraph.add_edge(node_num, self.node_count)
                     self.node_count += 1
 
+            if len(lock_lst) > 0:
+                prob = np.zeros(9)
+                for i in lock_lst:
+                    prob[i] = 1
+                prob = prob / prob.sum()
+                for i in node_lst:
+                    self.digraph.nodes[i]["P"] = prob[self.digraph.nodes[i]["A"]]
+
             if pass_flag:
-                self.digraph.add_node(self.node_count, state=self.digraph.nodes[node_num]["state"], W=0, N=1, P=1, A=None, done=0)
+                self.digraph.nodes[node_num]["N"] += 1
+                self.digraph.add_node(self.node_count, state=self.digraph.nodes[node_num]["state"], W=0, N=1, P=1, A=None, done=0, lock=1, player=-self.digraph.nodes[node_num]["player"])
                 self.digraph.add_edge(node_num, self.node_count)
                 self.node_count += 1
-        else:
-            self.digraph.nodes[node_num]["W"] += self.step(self.PUCT_rule(node_num))
 
-        return self.digraph.nodes[node_num]["W"]
+            W_sum = 0
+            N_sum = 0
+            for n in self.digraph.successors(node_num):
+                N_sum += self.digraph.nodes[n]["N"]
+                W_sum += self.digraph.nodes[n]["W"]
+            self.digraph.nodes[node_num]["N"] = N_sum
+            self.digraph.nodes[node_num]["W"] = W_sum
+
+        else:
+            if self.root > node_num:
+                self.step(self.kifu[node_num])
+            else:
+                self.step(self.PUCT_rule(node_num))
+            W_sum = 0
+            N_sum = 0
+            for n in self.digraph.successors(node_num):
+                N_sum += self.digraph.nodes[n]["N"]
+                W_sum += self.digraph.nodes[n]["W"]
+            self.digraph.nodes[node_num]["N"] = N_sum
+            self.digraph.nodes[node_num]["W"] = W_sum
+
+        return #self.digraph.nodes[node_num]["W"]
     
-    def PUCT_rule(self, node_num, return_pi=False):
+    def PUCT_rule(self, node_num):
         rNp = math.sqrt(self.digraph.nodes[node_num]["N"])
         PUCT = np.zeros(9)
         ns = np.zeros(9)
+        #Q = np.zeros(9)
+        #C = np.zeros(9)
+        #N = np.zeros(9)
+        obs0, obs1, obs3 = self.obs(node_num)
+        state = np.array([state_reshape(obs0, obs1, obs3, self.digraph.nodes[node_num]["player"])])
+        prob = p_old.eval(feed_dict={X_state: state})[0]
         for n in self.digraph.successors(node_num):
             node = self.digraph.nodes[n]
+            #N[node["A"]] = node["N"]
             ns[node["A"]] = n 
-            PUCT[node["A"]] = node["W"]*self.player/node["N"] + self.c*node["P"]*rNp/(1+node["N"])
+            node["P"] = prob[node["A"]]
+            #Q[node["A"]] = node["W"]*self.digraph.nodes[node_num]["player"]/node["N"]
+            #C[node["A"]] = (self.c*(self.dc**self.turn))*node["P"]*rNp/(1+node["N"])
+            #PUCT[node["A"]] = Q[node["A"]] + C[node["A"]]
+            PUCT[node["A"]] = node["W"]*self.digraph.nodes[node_num]["player"]/node["N"] + (self.c*(self.dc**self.turn))*node["P"]*rNp/(1+node["N"])
         if PUCT.sum() == 0:
-            PUCT += 1e-7
+            PUCT += 1
         PUCT = PUCT / PUCT.sum()
+        #print(PUCT)
+        #print("Q")
+        #print(Q)
+        #print("C")
+        #print(C)
+        #print("N")
+        #print(N)
         next_node = ns[PUCT==PUCT.max()][0]
-        self.player *= -1
-        if return_pi:
-            return next_node, PUCT
-        else:
-            return next_node
+        return next_node
 
     def search(self):
-        self.player = self.init_player
-        self.step(self.root)
+        self.step(0)
 
     def move(self):
-        next_node, pi = self.PUCT_rule(self.root, return_pi=True)
+        pi = np.zeros(9)
+        ns = np.zeros(9)
+        for cand in self.digraph.successors(self.root):
+            cand_node = self.digraph.nodes[cand]
+            ns[cand_node["A"]] = cand
+            pi[cand_node["A"]] = cand_node["N"]**(1/(self.dgamma**self.turn))
+        if pi.sum() == 0:
+            pi = np.ones(9)
+        pi = pi / pi.sum()
+        #print(ns)
+        #print(pi)
+        next_node = ns[pi==pi.max()][0]
+        self.kifu[self.root] = next_node
         self.root = next_node
-        self.init_player *= -1
+        self.turn += 1
         return self.digraph.nodes[next_node]["A"], pi
 
 def state_reshape(obs0, obs1, obs3, player):
@@ -201,16 +293,17 @@ def state_reshape(obs0, obs1, obs3, player):
     else:
         return np.concatenate((obs0_x, obs0_o, obs1_x, obs1_o, obs3_x, obs3_o, -np.ones((3,3,1))), axis=2)
 
-def example(example_memory, gamma=0.9):
+def example(example_memory, gamma=0.9, c=0.5):
     ex_s = []
     ex_p = []
-    Tree = MCTS()
+    Tree.reset(c)
     env.reset()
-    for i in range(max_turn):
-        for j in range(depth):
+    z_out = 0
+    for _ in range(max_turn):
+        for _ in range(depth):
             Tree.search()
         action_out, pi_out = Tree.move()
-        obs0, obs1, obs3, reward, done, player, valid = env.step(action_out)
+        obs0, obs1, obs3, reward, done, player, _ = env.step(action_out)
 
         s_out = state_reshape(obs0, obs1, obs3, player)
         
@@ -239,7 +332,29 @@ def make_batch(batch_size):
     z_batch = np.array([[example_z[i]] for i in indices])
     return state_batch, pi_batch, z_batch
 
-def battle():
+def prob_to_actions(prob):
+    ns = np.arange(9)
+    actions = []
+    for _ in range(9):
+        if prob.sum() == 0:
+            prob[ns>=0] += 1
+        prob = prob / prob.sum()
+        cdf = np.cumsum(prob)
+        try:
+            index = ns[cdf>np.random.rand()][0]
+        except IndexError:
+            print(prob)
+            print(cdf)
+            print(ns)
+            print("time: {}".format(time.time() - start))
+            import sys
+            sys.exit()
+        actions.append(index)
+        ns[index] = -1
+        prob[index] = 0
+    return np.array(actions)
+
+def battle(show=False):
     env.reset()
     player = 1
     done = False
@@ -250,23 +365,26 @@ def battle():
         new_player = 1
     else:
         new_player = -1
-    #print(new_player)
+    if show:
+        print(new_player)
     while (not done):
         state = np.array([state_reshape(obs0, obs1, obs3, player)])
-        #print(obs0.reshape(3,3))
+        if show:
+            print(obs0.reshape(3,3))
         if new_player == player:
             prob = p_new.eval(feed_dict={X_state: state})
         else:
             prob = p_old.eval(feed_dict={X_state: state})
-        actions = np.argsort(prob[0])[::-1]
+        actions = prob_to_actions(prob[0])
         for a in actions:
             obs0, obs1, obs3, reward, done, player, valid = env.step(a)
             if valid:
                 break
-    #print(reward)
+    if show:
+        print(reward)
     return reward * new_player
 
-def battle_with_rand():
+def battle_with_rand(show=False):
     env.reset()
     player = 1
     done = False
@@ -277,56 +395,130 @@ def battle_with_rand():
         new_player = 1
     else:
         new_player = -1
-    print(new_player)
+    if show:
+        print(new_player)
     while (not done):
-        print(obs0.reshape((3,3)))
-        print("player: {}".format(player))
+        if show:
+            print(obs0.reshape((3,3)))
+            print("player: {}".format(player))
         state = np.array([state_reshape(obs0, obs1, obs3, player)])
         if new_player == player:
             prob = p_new.eval(feed_dict={X_state: state})
-            print(prob)
+            if show:
+                print(prob)
         else:
             prob = np.random.random((1, 9))
+        #actions = prob_to_actions(prob[0])
         actions = np.argsort(prob[0])[::-1]
         for a in actions:
             obs0, obs1, obs3, reward, done, player, valid = env.step(a)
             if valid:
                 break
-    print(reward)
-    return reward * new_player
+    if show:
+        print(reward)
+    return reward, new_player
 
-with tf.Session() as sess:
-    init.run()
-    for i in range(200):
-        for j in range(50):
-            example(example_memory)
-        for j in range(50):
-            state_batch, pi_batch, z_batch = make_batch(batch_size)
-            if j == 0:
-                print("{}: loss={}".format(i, loss.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
-                #print("error: {}, entropy: {}".format(error.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch}),
-                #                                      entropy.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
-                #print(p_new.eval(feed_dict={X_state: state_batch}))
+c = 1.25
+
+if __name__=="__main__":
+    with tf.Session(config=gpuConfig) as sess:
+        init.run()
+        Tree = MCTS(c)
+        for i in range(3001):
+            for j in range(100):
+                example(example_memory)
+            for j in range(100):
+                state_batch, pi_batch, z_batch = make_batch(batch_size)
+                #ppp = p_new.eval(feed_dict={X_state: state_batch})
+                #print(ppp)
+                #import sys
+                #sys.exit()
+                if j == 0:
+                    print("{}: loss={}".format(i, loss.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
+                    #print("error: {}, entropy: {}".format(error.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch}),
+                    #                                      entropy.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
+                    #print(p_new.eval(feed_dict={X_state: state_batch}))
+            if i % 100 == 0:
+                ent1 = entropy.eval(feed_dict={X_state: state_batch, pi: pi_batch})
+                print(ent1)
             training_op.run(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})
-        win = 0
-        lose = 0
-        for j in range(25):
-            point = battle()
-            if point == 1:
-                win += 1
+            #if i % 100 == 0:
+            #    ent1 = entropy.eval(feed_dict={X_state: state_batch, pi: pi_batch})
+            #    print(ent1)
+            """
+            win = 0
+            lose = 0
+            for j in range(25):
+                point = battle()
+                if point == 1:
+                    win += 1
+                else:
+                    lose += 1
+            if win + lose > 0 and win / (win + lose) >= 0.6:
+            """
+            if True:
+                #print("RENEW!")
+                copy_new_to_old.run()
+                #c = 1.25
+                #learning_rate = 0.1
+            
+            if i % 100 == 0:
+                saver.save(sess, "./my_dqn.ckpt")
+                with open("Tree.pkl", "wb") as f:
+                    pickle.dump(Tree, f)
+            
+            if i >= 1000:
+                learning_rate = 0.02
+            if i >= 2000:
+                learning_rate = 0.002
+            """
             else:
-                lose += 1
-        if win + lose > 0 and win / (win + lose) >= 0.55:
-            print("RENEW!")
-            copy_new_to_old.run()
+                copy_old_to_new.run()
+                learning_rate *= 1.1
+                c = np.random.random() * 2
+            if win + lose == 0:
+                print("win rate: None")
+            else:
+                print("win rate: {}".format(win / (win + lose)))
+                if win / (win + lose) == 0:
+                    for _ in range(10):
+                        _ = battle(show=True) 
+            """
+        win_x = 0
+        win_o = 0
+        lose_x = 0
+        lose_o = 0
+        for i in range(100):
+            if i % 10 == 0:
+                reward, new_player = battle_with_rand(True)
+            else:
+                reward, new_player = battle_with_rand()
+            if reward == -1:
+                if new_player == -1:
+                    win_o += 1
+                else:
+                    lose_o += 1
+            if reward == 1:
+                if new_player == 1:
+                    win_x += 1
+                else:
+                    lose_x += 1
+    if win_x + win_o + lose_x + lose_o == 0:
+        print("None")
+    else:
+        print("final win rate: {}".format((win_x + win_o)/(win_x + win_o + lose_x + lose_o)))
+        if win_x + lose_x == 0:
+            print("\twin rate for  1: None")
         else:
-            copy_old_to_new.run()
-        if win + lose == 0:
-            print("win rate: None")
+            print("\twin rate for  1: {}".format((win_x)/(win_x + lose_x)))
+        if win_o + lose_o == 0:
+            print("\twin rate for -1: None")
         else:
-            print("win rate: {}".format(win / (win + lose)))
-    
-    point = 0
-    for i in range(100):
-        point += battle_with_rand()
-print(point)
+            print("\twin rate for -1: {}".format((win_o)/(win_o + lose_o)))
+
+end = 0
+for i in Tree.digraph.nodes:
+    if Tree.digraph.node[i]["done"] == 1:
+        end += 1
+print("end: {}".format(end))
+print("time: {}".format(time.time() - start))
