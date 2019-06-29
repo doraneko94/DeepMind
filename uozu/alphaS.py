@@ -52,15 +52,15 @@ def alpha(X_state, name):
         hidden3 = tf.layers.dense(hidden1, n_hidden,
                                   activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
         p_raw = tf.layers.dense(hidden3, n_outputs1, activation=hidden_activation1, kernel_initializer=initializer, kernel_regularizer=regularizer)
-        p = p_raw / tf.reduce_sum(p_raw)
+        p = tf.nn.softmax(p_raw)
         v = tf.layers.dense(hidden2, n_outputs2, activation=hidden_activation2, kernel_initializer=initializer, kernel_regularizer=regularizer)
     trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name)
     trainable_vars_by_name = {var.name[len(scope.name):]: var for var in trainable_vars}
-    return p, v, trainable_vars_by_name
+    return p, v, last_conv_layer_flat# trainable_vars_by_name
 
 p_new, v_new, vars_new = alpha(X_state, "alpha/new")
 
-learning_rate = 0.00001
+learning_rate = 0.2
 
 with tf.variable_scope("train"):
     z = tf.placeholder(tf.float32, shape=[None, 1])
@@ -211,9 +211,9 @@ class MCTS:
 
         return
     
-    def PUCT_rule(self, node_num):
+    def PUCT_rule(self, node_num, inspect=False):
         rNp = math.sqrt(self.digraph.nodes[node_num]["N"])
-        PUCT = np.zeros(9)
+        PUCT = np.array([-np.inf] * 9)
         ns = np.zeros(9)
 
         obs0, obs1, obs3 = self.obs(node_num)
@@ -224,11 +224,15 @@ class MCTS:
             ns[node["A"]] = n 
             node["P"] = prob[node["A"]]
             PUCT[node["A"]] = node["W"]*self.digraph.nodes[node_num]["player"]/node["N"] + (self.c*(self.dc**self.turn))*node["P"]*rNp/(1+node["N"])
+        """
         if PUCT.sum() == 0:
             PUCT += 1
-        PUCT = PUCT / PUCT.sum()
+        PUCT = PUCT / abs(PUCT.sum())
+        """
 
         next_node = ns[PUCT==PUCT.max()][0]
+        if inspect:
+            return PUCT
         return next_node
 
     def search(self):
@@ -348,19 +352,24 @@ if __name__=="__main__":
     with tf.Session(config=gpuConfig) as sess:
         init.run()
         Tree = MCTS(c)
-        for i in range(301): # 3001
-            for j in range(25): # 100
-                example(example_memory)
-            for j in range(25): # 100
+        for i in range(30): # 3001
+            for j in range(100): # 100
+                example(example_memory, c=c)
+            for j in range(100): # 100
                 state_batch, pi_batch, z_batch = make_batch(batch_size)
                 if j == 0:
+                    print(z_batch[:3])
+                    print(v_new.eval(feed_dict={X_state: state_batch})[:3])
+                    print(pi_batch[:3])
+                    print(p_new.eval(feed_dict={X_state: state_batch})[:3])
+                if j == 0:
                     print("{}: loss={}".format(i, loss.eval(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})))
-            if i % 100 == 0:
-                ent1 = entropy.eval(feed_dict={X_state: state_batch, pi: pi_batch})
-                print(ent1)
+            #if i % 100 == 0:
+            #    ent1 = entropy.eval(feed_dict={X_state: state_batch, pi: pi_batch})
+            #    print(ent1)
             training_op.run(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})
             
-            if i % 100 == 0:
+            if True:#i % 9 == 0:
                 saver.save(sess, "./my_dqn.ckpt")
                 with open("Tree.pkl", "wb") as f:
                     pickle.dump(Tree, f)
@@ -369,7 +378,7 @@ if __name__=="__main__":
                 learning_rate = 0.02
             if i >= 2000:
                 learning_rate = 0.002
-
+        """
         win_x = 0
         win_o = 0
         lose_x = 0
@@ -401,6 +410,22 @@ if __name__=="__main__":
             print("\twin rate for -1: None")
         else:
             print("\twin rate for -1: {}".format((win_o)/(win_o + lose_o)))
+    """
+        max_N = 0
+        ind = 0
+        print(Tree.PUCT_rule(0, inspect=True))
+        print(Tree.PUCT_rule(0, inspect=False))
+        for i in range(9):
+            node = Tree.digraph.nodes[i+1]
+            print(node)
+            if node["N"] > max_N:
+                max_N = node["N"]
+                ind = i+1
+
+        print(Tree.PUCT_rule(ind, inspect=True))
+        print(Tree.PUCT_rule(ind, inspect=False))
+        for i in Tree.digraph.successors(ind):
+            print(Tree.digraph.nodes[i])
 
 end = 0
 for i in Tree.digraph.nodes:
