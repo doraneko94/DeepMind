@@ -350,7 +350,7 @@ if __name__=="__main__":
         init.run()
         Tree = MCTS()
         for i in range(30): # 3001
-            for j in range(2): # 100
+            for j in range(10): # 100
                 example(example_memory)
                 print(env.n_koma)
             for j in range(100): # 100
