@@ -5,6 +5,7 @@ import networkx as nx
 import math
 import time
 import pickle
+from sklearn.externals.joblib import Parallel, delayed
 
 start = time.time()
 
@@ -303,6 +304,7 @@ def state_reshape(obs0, obs3, obs7, player):
 def example(example_memory, gamma=0.95):
     ex_s = []
     ex_p = []
+    #Tree = MCTS()
     Tree.reset()
     env.reset()
     z_out = 0
@@ -314,7 +316,6 @@ def example(example_memory, gamma=0.95):
             env.player *= -1
             continue
         obs0, obs3, obs7, player = env.get_state()
-        #print(obs0)
         reward, done, _ = env.step(y_out, x_out, a_out)
         
         s_out = state_reshape(obs0, obs3, obs7, player)
@@ -326,7 +327,10 @@ def example(example_memory, gamma=0.95):
             z_out = reward
             break
     ex_z = [z_out*(gamma**i) for i in range(len(ex_p))][::-1]
-    for ss, pp, zz in zip(ex_s, ex_p, ex_z):
+    return [ex_s, ex_p, ex_z]
+
+def example_pick():
+    for [ss, pp, zz] in ex_lst:
         if len(example_z) == example_memory:
             index = np.random.randint(example_memory)
             example_state[index] = ss
@@ -350,9 +354,8 @@ if __name__=="__main__":
         init.run()
         Tree = MCTS()
         for i in range(30): # 3001
-            for j in range(10): # 100
-                example(example_memory)
-                print(env.n_koma)
+            ex_lst = Parallel(n_jobs=-1)(delayed(example)(example_memory) for _ in range(40))
+            example_pick()
             for j in range(100): # 100
                 state_batch, pi_batch, z_batch = make_batch(batch_size)
                 if j == 0:

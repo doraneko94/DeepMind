@@ -5,8 +5,25 @@ import networkx as nx
 import math
 import time
 import pickle
+import tkinter as tk
 
 start = time.time()
+
+win = tk.Tk()
+win.title("闘獣棋")
+win.geometry("448x576")
+
+board_img = tk.PhotoImage(file="img/board.png")
+playerA_img = [tk.PhotoImage(file="img/mouse.png"), tk.PhotoImage(file="img/cat.png"),
+               tk.PhotoImage(file="img/dog.png"), tk.PhotoImage(file="img/wolf.png"),
+               tk.PhotoImage(file="img/panther.png"), tk.PhotoImage(file="img/lion.png"),
+               tk.PhotoImage(file="img/tiger.png"), tk.PhotoImage(file="img/elephant.png")]
+playerB_img = [tk.PhotoImage(file="img/mouse2.png"), tk.PhotoImage(file="img/cat2.png"),
+               tk.PhotoImage(file="img/dog2.png"), tk.PhotoImage(file="img/wolf2.png"),
+               tk.PhotoImage(file="img/panther2.png"), tk.PhotoImage(file="img/lion2.png"),
+               tk.PhotoImage(file="img/tiger2.png"), tk.PhotoImage(file="img/elephant2.png")]
+cv = tk.Canvas(win, width=448-1, height=576-1)
+cv.place(x=0, y=0)
 
 gpuConfig = tf.ConfigProto(
     gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.9),
@@ -98,7 +115,7 @@ example_memory = 50000 # 50000
 env = animalEnv()
 
 max_turn = 256
-depth = 30 #800
+depth = 100 #800
 
 batch_size = 32
 
@@ -300,6 +317,22 @@ def state_reshape(obs0, obs3, obs7, player):
     else:
         return np.concatenate((obs0_x, obs0_o, obs3_x, obs3_o, obs7_x, obs7_o, -np.ones((9, 7, 1))), axis=2)
 
+def draw(obs):
+    cv.delete("board")
+    cv.create_image(0, 0, image=board_img, anchor="nw", tag="board")
+    for y in range(9):
+        for x in range(7):
+            tag = str(y) + str(x)
+            cv.delete(tag)
+            if obs[y][x] > 0:
+                cv.create_image(64*x, 64*y, image=playerA_img[abs(obs[y][x])-1], anchor="nw", tag=tag)
+            if obs[y][x] < 0:
+                cv.create_image(64*x, 64*y, image=playerB_img[abs(obs[y][x])-1], anchor="nw", tag=tag)
+    win.update()
+    #import time
+    #time.sleep(10)
+    return
+
 def example(example_memory, gamma=0.95):
     ex_s = []
     ex_p = []
@@ -314,7 +347,7 @@ def example(example_memory, gamma=0.95):
             env.player *= -1
             continue
         obs0, obs3, obs7, player = env.get_state()
-        #print(obs0)
+        draw(obs0)
         reward, done, _ = env.step(y_out, x_out, a_out)
         
         s_out = state_reshape(obs0, obs3, obs7, player)
@@ -347,17 +380,17 @@ def make_batch(batch_size):
 
 if __name__=="__main__":
     with tf.Session(config=gpuConfig) as sess:
-        init.run()
+        saver.restore(sess, "./my_dqn_gui.ckpt")
         Tree = MCTS()
         for i in range(30): # 3001
             for j in range(10): # 100
                 example(example_memory)
-                print(env.n_koma)
+                #print(env.n_koma)
             for j in range(100): # 100
                 state_batch, pi_batch, z_batch = make_batch(batch_size)
                 if j == 0:
-                    print(z_batch[0])
-                    print(v.eval(feed_dict={X_state: state_batch})[0])
+                    #print(z_batch[0])
+                    #print(v.eval(feed_dict={X_state: state_batch})[0])
                     #print(pi_batch[0])
                     #print(p.eval(feed_dict={X_state: state_batch})[0])
                 #if j == 0:
@@ -368,7 +401,7 @@ if __name__=="__main__":
             training_op.run(feed_dict={X_state: state_batch, z: z_batch, pi: pi_batch})
             
             if True:#i % 9 == 0:
-                saver.save(sess, "./my_dqn.ckpt")
+                saver.save(sess, "./my_dqn_gui.ckpt")
             
             if i == 1000:
                 learning_rate = 0.02
