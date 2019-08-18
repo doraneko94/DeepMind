@@ -111,11 +111,11 @@ saver = tf.train.Saver()
 example_state = []
 example_pi = []
 example_z = []
-example_memory = 50000 # 50000
+example_memory = 5000 # 50000
 env = animalEnv()
 
 max_turn = 256
-depth = 100 #800
+depth = 300 #800
 
 batch_size = 32
 
@@ -296,6 +296,9 @@ class MCTS:
         return action[0], action[1], action[2], pi
 
 def state_reshape(obs0, obs3, obs7, player):
+    #obs0_x = [np.copy(obs0.reshape(9, 7, 1)) for i in range(1, 9)]
+    #for i in range(8):
+    #    obs0_x[i][obs0_x[i]!=(i+1)] = 0
     obs0_x = np.copy(obs0.reshape(9, 7, 1))
     obs0_x[obs0_x<=0] = 0
     obs0_o = np.copy(obs0.reshape(9, 7, 1))
@@ -333,7 +336,7 @@ def draw(obs):
     #time.sleep(10)
     return
 
-def example(example_memory, gamma=0.95):
+def example(example_memory, gamma=0.99):
     ex_s = []
     ex_p = []
     Tree.reset()
@@ -358,6 +361,7 @@ def example(example_memory, gamma=0.95):
         if done:
             z_out = reward
             break
+    print(z_out)
     ex_z = [z_out*(gamma**i) for i in range(len(ex_p))][::-1]
     for ss, pp, zz in zip(ex_s, ex_p, ex_z):
         if len(example_z) == example_memory:
@@ -402,6 +406,12 @@ if __name__=="__main__":
             
             if True:#i % 9 == 0:
                 saver.save(sess, "./my_dqn_gui.ckpt")
+                with open("example_state.pkl", "wb") as f:
+                    pickle.dump(example_state, f)
+                with open("example_pi.pkl", "wb") as f:
+                    pickle.dump(example_pi, f)
+                with open("example_z.pkl", "wb") as f:
+                    pickle.dump(example_z, f)
             
             if i == 1000:
                 learning_rate = 0.02

@@ -347,7 +347,8 @@ def make_batch(batch_size):
 
 if __name__=="__main__":
     with tf.Session(config=gpuConfig) as sess:
-        init.run()
+        saver.restore(sess, "./my_dqn.ckpt")
+        #init.run()
         Tree = MCTS()
         for i in range(30): # 3001
             for j in range(10): # 100
